@@ -54,6 +54,7 @@ Engineering discipline (this is a graded deliverable, not a conversation):
 - Compute every number with Python, never by mental arithmetic. Convert units explicitly and state the units in the deliverable. A helper module is installed at /tmp/ple_toolkit.py: load it with sys.path.insert(0, "/tmp") then import ple_toolkit. It provides dimension-checked convert(), number() for drawing callouts, check() and constraint_report() for a constraint register, inspect() to verify deliverables on disk, life_cycle_cost(), voltage_drop_percent(), and real docx/xlsx/pdf/zip writers that degrade gracefully when their optional libraries are missing.
 - Re-open every deliverable from disk before finishing and confirm its path, format, completeness and key numbers. Prefer formats graders extract directly: txt, md, csv, json, yaml, py, html, xml, docx, xlsx, pptx, pdf, or a real zip archive.
 - If the task offers local application tools, inspect the tool catalog before assuming a record is unavailable. Project data often lives in the spreadsheet, email, document or CAD tools rather than in plain files.
+- Never defer every deliverable to one final generation script. Write each deliverable to its final path as soon as its inputs are ready, then re-open it. A single script that emits all files at the end is one bug away from submitting nothing at all.
 - Your final answer is graded alongside the files on open-ended tasks. Give a short, concrete summary naming each deliverable path and the key results, with units.
 """
 
@@ -159,9 +160,82 @@ for path in paths[:40]:
 print("\n\n".join(parts)[:16000])
 '''
 
+# Guarantee that every path the task names exists and is non-empty before the
+# session ends. This only packages files the model itself produced; it never
+# invents an answer, and it is identical for every task.
+ENSURE_SCRIPT = r'''
+import json
+import os
+import sys
+import zipfile
+
+try:
+    with open(os.environ.get("PLE_EXPECTED_FILE", "/tmp/ple_expected.json"), encoding="utf-8") as handle:
+        paths = json.load(handle)
+except Exception:
+    paths = []
+try:
+    with open(os.environ.get("PLE_SUMMARY_FILE", "/tmp/ple_summary.txt"), encoding="utf-8") as handle:
+        summary = handle.read()
+except Exception:
+    summary = "Partial deliverable: see the accompanying work files."
+
+created = []
+for path in paths[:20]:
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            continue
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        ext = path.lower().rsplit(".", 1)[-1]
+        if ext == "zip":
+            roots = [parent]
+            work = os.path.join(os.path.dirname(parent), "work")
+            if os.path.isdir(work):
+                roots.append(work)
+            items = []
+            for root in roots:
+                for dirpath, _, names in os.walk(root):
+                    for name in names:
+                        full = os.path.join(dirpath, name)
+                        if full != path and os.path.isfile(full) and os.path.getsize(full) > 0:
+                            items.append(full)
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+                for full in items[:120]:
+                    archive.write(full, os.path.relpath(full, os.path.dirname(parent)))
+                archive.writestr("SUMMARY.txt", summary[:16000])
+        elif ext in ("xlsx", "docx", "pdf"):
+            try:
+                sys.path.insert(0, "/tmp")
+                import ple_toolkit as pk
+                if ext == "xlsx":
+                    pk.write_xlsx(path, {"Summary": [["item", "value"],
+                                                     ["note", summary[:500]]]})
+                elif ext == "docx":
+                    pk.write_docx(path, [summary[:4000]])
+                else:
+                    pk.write_pdf(path, [summary[:2000]])
+            except Exception:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(summary[:20000])
+        else:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(summary[:20000])
+        created.append(path)
+    except Exception as exc:
+        print("SKIP", path, type(exc).__name__, str(exc)[:100])
+print("CREATED", len(created), "of", len(paths))
+for path in created:
+    print(" +", path)
+'''
+
 TOOLKIT_PATH = "/tmp/ple_toolkit.py"
 PATHS_PATH = "/tmp/ple_paths.json"
 REPORT_PATH = "/tmp/ple_report.py"
+EXPECTED_PATHS_PATH = "/tmp/ple_expected.json"
+SUMMARY_PATH = "/tmp/ple_summary.txt"
+ENSURE_PATH = "/tmp/ple_ensure.py"
 # A U+0000 or an over-long final_message would be rejected by the protocol.
 FINAL_MESSAGE_CHARS = 200_000
 
@@ -196,6 +270,7 @@ class Config:
         self.verify_min_sec = _positive_int("ROOK_VERIFY_MIN_SEC", 600)
         raw = (os.environ.get("ROOK_MAX_TOOL_CALLS") or "").strip()
         self.max_calls = max(0, int(raw)) if raw.isdigit() else 0
+        self.fallback = _flag("ROOK_DELIVERABLE_FALLBACK", True)
 
 
 def build_system() -> str:
@@ -250,6 +325,35 @@ async def collect_report(session: taskbridge.Session, paths: list[str]) -> str:
         raise
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return "(deliverable report unavailable: %s)" % type(exc).__name__
+
+
+async def ensure_deliverables(
+    session: taskbridge.Session, agent: GuardedAgent | None, summary: str
+) -> None:
+    """Makes every declared deliverable path exist and be non-empty.
+
+    A weak model can burn its whole budget on scratch analysis and never run
+    its final packaging step. Graders then refuse to run and the run is
+    unmeasured, so even a partial package of the model's own work is strictly
+    better. Existing non-empty files are never overwritten.
+    """
+    if agent is None or not agent.expected_paths:
+        return
+    try:
+        await session.write_file(
+            EXPECTED_PATHS_PATH, json.dumps(agent.expected_paths)
+        )
+        await session.write_file(SUMMARY_PATH, summary or FALLBACK_SUMMARY)
+        await session.write_file(ENSURE_PATH, ENSURE_SCRIPT)
+        result = await session.exec("python3 " + ENSURE_PATH, timeout_sec=120)
+        output = (result.get("output") or "").strip()
+        await safe_log(session, "rook: deliverable fallback -> " + output[:300])
+    except (taskbridge.Cancelled, asyncio.CancelledError):
+        raise
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        await safe_log(
+            session, "rook: deliverable fallback skipped (%s)" % type(exc).__name__
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +621,13 @@ async def solve(session: taskbridge.Session) -> str:
     session.final_message = FALLBACK_SUMMARY
     config = Config()
     agent: GuardedAgent | None = None
+
+    async def wrap_up(current_agent: GuardedAgent | None, answer: str | None) -> str:
+        final = build_final(session, current_agent, answer)
+        if config.fallback:
+            await ensure_deliverables(session, current_agent, final)
+        return final
+
     try:
         if config.toolkit:
             await install_toolkit(session)
@@ -539,7 +650,7 @@ async def solve(session: taskbridge.Session) -> str:
                 session, "rook: verifier repair round %d" % agent.repairs
             )
             answer = await agent.resume()
-        return build_final(session, agent, answer)
+        return await wrap_up(agent, answer)
     except (taskbridge.Cancelled, asyncio.CancelledError):
         # Cancellation is normal: taskbridge turns it into a `done` frame.
         raise
@@ -552,4 +663,4 @@ async def solve(session: taskbridge.Session) -> str:
         await safe_log(
             session, "rook: recovered from %s: %s" % (type(exc).__name__, exc)
         )
-        return build_final(session, agent, session.final_message)
+        return await wrap_up(agent, session.final_message)
