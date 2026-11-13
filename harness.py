@@ -58,13 +58,39 @@ Engineering discipline (this is a graded deliverable, not a conversation):
 """
 
 GUARD_MESSAGE = (
-    "Checkpoint: the last several tool calls did not write a deliverable file. "
-    "Only files at the exact paths named in the task are graded, and files "
-    "already on disk are scored even when a run ends early. Write a minimal "
-    "but complete, compliant first version of EVERY deliverable now, at its "
-    "exact path and in a grader-readable format, then continue improving it. "
-    "After writing, re-open each file to verify it is real and complete."
+    "STOP AND DELIVER NOW. The last several tool calls produced only scratch "
+    "or analysis files, not a deliverable at the exact path the task names. "
+    "Scratch work in a work/ or tmp/ folder is not collected: graders read "
+    "only the declared deliverable paths, and files already on disk are "
+    "scored even when a run ends early. Write a minimal but complete, "
+    "compliant first version of EVERY deliverable at its exact required path "
+    "and in a grader-readable format right now, before any further analysis. "
+    "Then re-open each file to verify it is real and complete, and continue "
+    "improving it only after that."
 )
+
+# Paths the task itself names as deliverables (a generic text extraction, not
+# a task-id lookup). Used only to tell scratch writes apart from deliverables.
+DELIVERABLE_PATH = re.compile(
+    r"/[\w.\-]+(?:/[\w.\-]+)+/[\w.\-]+\."
+    r"(?:zip|json|csv|xlsx|docx|pdf|md|txt|ifc|py|yaml|yml|xml|html|pptx|dwg|dxf)",
+    re.I,
+)
+DELIVERABLE_HINT = re.compile(
+    r"(?:^|/)(?:output|submission|deliverables?|deliverable|final|results?)"
+    r"(?:/|$|\.)",
+    re.I,
+)
+
+
+def deliverable_paths(instruction: str) -> tuple[str, ...]:
+    """Extracts absolute file paths the task names, without task-id branching."""
+    found = []
+    for match in DELIVERABLE_PATH.finditer(instruction or ""):
+        path = match.group(0)
+        if path not in found:
+            found.append(path)
+    return tuple(found[:40])
 
 FALLBACK_SUMMARY = (
     "The agent stopped before it could summarise its work. The complete "
@@ -168,6 +194,8 @@ class Config:
         self.guard_after = _positive_int("ROOK_GUARD_AFTER", 6)
         self.verify_rounds = _positive_int("ROOK_VERIFY_ROUNDS", 1)
         self.verify_min_sec = _positive_int("ROOK_VERIFY_MIN_SEC", 600)
+        raw = (os.environ.get("ROOK_MAX_TOOL_CALLS") or "").strip()
+        self.max_calls = max(0, int(raw)) if raw.isdigit() else 0
 
 
 def build_system() -> str:
@@ -250,6 +278,8 @@ class GuardedAgent(engine.Agent):
         self.tool_calls = 0
         self.guard_prompts = 0
         self.repairs = 0
+        self.expected_paths = deliverable_paths(session.instruction)
+        self.deliverable_writes = 0
 
     async def run_tool(self, name: str, args: dict[str, Any]) -> str:
         """Runs a tool and tracks whether it changed a file on disk."""
@@ -266,18 +296,45 @@ class GuardedAgent(engine.Agent):
                 word in tool
                 for word in ("write", "create", "save", "update", "send", "export")
             )
-        if wrote:
+        target = ""
+        if isinstance(args, dict):
+            target = str(args.get("path") or "")
+        if not target and name == "bash" and isinstance(args, dict):
+            match = DELIVERABLE_PATH.search(str(args.get("command", "")))
+            target = match.group(0) if match else ""
+        is_deliverable = bool(target) and (
+            bool(DELIVERABLE_HINT.search(target))
+            or any(
+                target == path or target.startswith(path.rsplit("/", 1)[0])
+                for path in self.expected_paths
+            )
+        )
+        if wrote and is_deliverable:
             self.silent_streak = 0
-            if isinstance(args, dict):
-                path = args.get("path")
-                if isinstance(path, str) and path and len(self.written_paths) < 200:
-                    self.written_paths.append(path)
+            self.deliverable_writes += 1
         else:
             self.silent_streak += 1
+        if wrote and isinstance(args, dict):
+            path = args.get("path")
+            if isinstance(path, str) and path and len(self.written_paths) < 200:
+                self.written_paths.append(path)
         return result
 
     async def complete(self, *args: Any, **kwargs: Any) -> Any:
         """Injects a deliverable checkpoint before the next model call."""
+        if (
+            kwargs.get("tool_choice", "auto") != "none"
+            and self.config.max_calls
+            and self.tool_calls >= self.config.max_calls
+        ):
+            await safe_log(
+                self.session,
+                "rook: tool-call budget reached (%d), wrapping up"
+                % self.tool_calls,
+            )
+            # The engine's run()/resume() already turn OutOfTime into a final
+            # summary call, so files on disk still reach the grader.
+            raise engine.OutOfTime()
         if self.config.guard and self.silent_streak >= self.config.guard_after:
             if self.messages and self.messages[-1].get("role") == "user":
                 last = self.messages[-1]
@@ -432,9 +489,14 @@ def build_final(
         lines.extend("- " + path for path in paths)
     if agent:
         lines.append(
-            "\n[harness: %d tool calls, %d deliverable checkpoints, "
-            "%d verifier repairs]"
-            % (agent.tool_calls, agent.guard_prompts, agent.repairs)
+            "\n[harness: %d tool calls, %d deliverable writes, "
+            "%d checkpoint nudges, %d verifier repairs]"
+            % (
+                agent.tool_calls,
+                agent.deliverable_writes,
+                agent.guard_prompts,
+                agent.repairs,
+            )
         )
     text = "\n".join(lines)[:FINAL_MESSAGE_CHARS]
     session.final_message = text
