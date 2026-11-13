@@ -1,0 +1,11 @@
+# Derived from google-research/ple sample_submissions/custom-openai (Apache-2.0).
+name: rook-ple-harness
+model_api: google-cloud/claude-opus-5-5
+install: >-
+  uv venv --python 3.12 /opt/harness/venv
+  && uv pip install --python /opt/harness/venv/bin/python -r {src}/requirements.txt
+serve: /opt/harness/venv/bin/python {src}/serve.py
+env:
+  MAX_OUTPUT_TOKENS: "32000"
+  COMPACT_AT_TOKENS: "150000"
+  REASONING_EFFORT: "max"
