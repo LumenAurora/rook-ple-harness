@@ -27,6 +27,7 @@ the declared model endpoint (handled by the engine).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -72,7 +73,69 @@ FALLBACK_SUMMARY = (
     "files. No deliverable was intentionally omitted."
 )
 
+VERIFIER_SYSTEM = (
+    "You are a licensed reviewer checking another engineer's completed work in a "
+    "Linux container. You are given the task, the engineer's summary, and a report "
+    "of the files actually on disk. You cannot change anything. "
+    "Check each deliverable the task names: exact path, readable format, non-empty "
+    "content, every required section or item present, units stated and consistent, "
+    "and every hard safety or feasibility constraint satisfied. Recompute any key "
+    "number you can from the file contents. Ignore stylistic polish. "
+    "If everything the task requires is present and no hard constraint is broken, "
+    "reply with the single word PASS and nothing else. "
+    "Otherwise reply with a numbered list of concrete, fixable gaps, each naming "
+    "the file path and what is wrong. Do not invent requirements the task does not state."
+)
+
+REPAIR_TEMPLATE = (
+    "An independent reviewer found gaps in the deliverables currently on disk:\n"
+    "%s\n\n"
+    "Fix them now with your tools, keeping every part that already passes. "
+    "Re-open each changed file to confirm it is complete, then give your final "
+    "summary of deliverable paths and key results."
+)
+
+# Written into the task container to give the verifier real file contents.
+# A raw string keeps the escapes intact for the Python process inside the task.
+REPORT_SCRIPT = r'''
+import json
+import os
+
+try:
+    with open(os.environ.get("PLE_PATHS_FILE", "/tmp/ple_paths.json"), encoding="utf-8") as handle:
+        paths = json.load(handle)
+except Exception:
+    paths = []
+
+parts = []
+for path in paths[:40]:
+    if not os.path.exists(path):
+        parts.append("MISSING " + path)
+        continue
+    if os.path.isdir(path):
+        try:
+            names = sorted(os.listdir(path))[:30]
+            parts.append("DIR %s -> %s" % (path, ", ".join(names)))
+        except Exception as exc:
+            parts.append("DIR %s unreadable: %s" % (path, exc))
+        continue
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            data = handle.read(6000)
+        if data[:4] == b"PK\x03\x04" or b"\x00" in data[:1024]:
+            preview = "[binary archive, %d bytes]" % size
+        else:
+            preview = data.decode("utf-8", "replace")[:1800]
+        parts.append("FILE %s (%d bytes)\n%s" % (path, size, preview))
+    except Exception as exc:
+        parts.append("FILE %s unreadable: %s" % (path, exc))
+print("\n\n".join(parts)[:16000])
+'''
+
 TOOLKIT_PATH = "/tmp/ple_toolkit.py"
+PATHS_PATH = "/tmp/ple_paths.json"
+REPORT_PATH = "/tmp/ple_report.py"
 # A U+0000 or an over-long final_message would be rejected by the protocol.
 FINAL_MESSAGE_CHARS = 200_000
 
@@ -103,6 +166,8 @@ class Config:
         self.toolkit = _flag("ROOK_TOOLKIT", True)
         self.guard = _flag("ROOK_DELIVERABLE_GUARD", True)
         self.guard_after = _positive_int("ROOK_GUARD_AFTER", 6)
+        self.verify_rounds = _positive_int("ROOK_VERIFY_ROUNDS", 1)
+        self.verify_min_sec = _positive_int("ROOK_VERIFY_MIN_SEC", 600)
 
 
 def build_system() -> str:
@@ -137,6 +202,28 @@ async def install_toolkit(session: taskbridge.Session) -> bool:
         return False
 
 
+async def collect_report(session: taskbridge.Session, paths: list[str]) -> str:
+    """Returns a bounded, real snapshot of the deliverables on disk.
+
+    The reporter runs inside the task container, so the verifier judges files
+    that exist rather than the worker's description of them. Only /tmp helper
+    files are added, outside every task's declared deliverable paths.
+    """
+    unique = list(dict.fromkeys(paths))[:40]
+    if not unique:
+        return "(the harness recorded no deliverable writes)"
+    try:
+        await session.write_file(PATHS_PATH, json.dumps(unique))
+        await session.write_file(REPORT_PATH, REPORT_SCRIPT)
+        result = await session.exec("python3 " + REPORT_PATH, timeout_sec=60)
+        output = result.get("output") or ""
+        return output[:16000] or "(the deliverable report was empty)"
+    except (taskbridge.Cancelled, asyncio.CancelledError):
+        raise
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return "(deliverable report unavailable: %s)" % type(exc).__name__
+
+
 # ---------------------------------------------------------------------------
 # The guarded agent.
 # ---------------------------------------------------------------------------
@@ -162,6 +249,7 @@ class GuardedAgent(engine.Agent):
         self.written_paths: list[str] = []
         self.tool_calls = 0
         self.guard_prompts = 0
+        self.repairs = 0
 
     async def run_tool(self, name: str, args: dict[str, Any]) -> str:
         """Runs a tool and tracks whether it changed a file on disk."""
@@ -203,6 +291,122 @@ class GuardedAgent(engine.Agent):
             self.guard_prompts += 1
         return await super().complete(*args, **kwargs)
 
+    async def verify(self, summary: str, report: str) -> tuple[bool, str]:
+        """Runs a fresh-context, read-only review of the files on disk.
+
+        Returns (passed, gaps). A verifier problem never fails the task: it
+        simply leaves the worker's answer as the submission.
+        """
+        saved = self.messages
+        self.messages = [
+            {"role": "system", "content": VERIFIER_SYSTEM},
+            {
+                "role": "user",
+                "content": (
+                    "TASK:\n%s\n\nWORKER SUMMARY:\n%s\n\n"
+                    "REPORT OF FILES ACTUALLY ON DISK:\n%s"
+                    % (
+                        self.session.instruction[:24000],
+                        (summary or "(no summary)")[:6000],
+                        report,
+                    )
+                ),
+            },
+        ]
+        try:
+            # Call the engine method directly so the deliverable guard cannot
+            # inject a checkpoint into the verifier's clean context.
+            reply = await engine.Agent.complete(
+                self, tool_choice="none", head=""
+            )
+        except (taskbridge.Cancelled, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            await safe_log(
+                self.session, "rook: verifier skipped (%s)" % type(exc).__name__
+            )
+            return True, ""
+        finally:
+            self.messages = saved
+        text = engine.visible(reply.text or "").strip()
+        if not text or text.upper().startswith("PASS"):
+            return True, ""
+        return False, text[:4000]
+
+    async def resume(self) -> str:
+        """Continues the engine's tool loop from the current message history.
+
+        This is the body of engine.Agent.run() without its initial setup, so a
+        repair round reuses everything the worker already discovered.
+        """
+        nudges, head = 0, ""
+        while True:
+            left = self.session.time_left()
+            if left is not None and left < self.finish_margin:
+                return await self.finish("Time is almost up.")
+            try:
+                reply = await self.complete(head=head)
+            except engine.OutOfTime:
+                return await self.finish(
+                    "Time is almost up, and the model is not answering."
+                )
+            except engine.CutOff:
+                return await self.finish("Time is almost up.")
+            arguments = [
+                engine.parse_arguments(call) for call in reply.calls.values()
+            ]
+            if reply.text or reply.calls:
+                self.messages.append(reply.message())
+            text = engine.visible(head + reply.text)
+            if text:
+                self.session.final_message = text
+            if not reply.calls:
+                if engine.visible(reply.text) and reply.finish == "length":
+                    nudges, head = 0, head + reply.text
+                    self.messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your reply was cut off at the output limit. "
+                            "Continue where it stopped, and put long content "
+                            "in files with write_file rather than in a reply."
+                        ),
+                    })
+                    continue
+                if engine.visible(reply.text) or nudges >= 2:
+                    return text or self.session.final_message
+                nudges += 1
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        "Continue the task; when it is done, answer with "
+                        "your summary of the deliverables."
+                    ),
+                })
+                continue
+            nudges, head = 0, ""
+            for call, args in zip(reply.calls.values(), arguments):
+                result = (
+                    await self.run_tool(call["name"], args)
+                    if isinstance(args, dict)
+                    else args
+                )
+                if reply.finish == "length" and isinstance(args, str):
+                    result += (
+                        " Your reply hit the output limit; write large files in parts."
+                    )
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": result,
+                })
+            left = self.session.time_left()
+            if left is not None:
+                self.messages[-1]["content"] += (
+                    "\n[%d minutes left]" % int(left // 60)
+                )
+            if self.prompt_tokens > self.compact_at():
+                await self.compact()
+
 
 # ---------------------------------------------------------------------------
 # Final message construction and the entry point.
@@ -228,8 +432,9 @@ def build_final(
         lines.extend("- " + path for path in paths)
     if agent:
         lines.append(
-            "\n[harness: %d tool calls, %d deliverable checkpoints]"
-            % (agent.tool_calls, agent.guard_prompts)
+            "\n[harness: %d tool calls, %d deliverable checkpoints, "
+            "%d verifier repairs]"
+            % (agent.tool_calls, agent.guard_prompts, agent.repairs)
         )
     text = "\n".join(lines)[:FINAL_MESSAGE_CHARS]
     session.final_message = text
@@ -256,6 +461,22 @@ async def solve(session: taskbridge.Session) -> str:
         engine.SYSTEM = build_system()
         agent = GuardedAgent(session, config)
         answer = await agent.run()
+        for _ in range(config.verify_rounds):
+            left = session.time_left()
+            if left is not None and left < config.verify_min_sec:
+                break
+            report = await collect_report(session, agent.written_paths)
+            passed, gaps = await agent.verify(answer, report)
+            if passed or not gaps:
+                break
+            agent.repairs += 1
+            agent.messages.append({
+                "role": "user", "content": REPAIR_TEMPLATE % gaps
+            })
+            await safe_log(
+                session, "rook: verifier repair round %d" % agent.repairs
+            )
+            answer = await agent.resume()
         return build_final(session, agent, answer)
     except (taskbridge.Cancelled, asyncio.CancelledError):
         # Cancellation is normal: taskbridge turns it into a `done` frame.
