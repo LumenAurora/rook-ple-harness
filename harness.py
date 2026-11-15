@@ -55,6 +55,8 @@ Engineering discipline (this is a graded deliverable, not a conversation):
 - Re-open every deliverable from disk before finishing and confirm its path, format, completeness and key numbers. Prefer formats graders extract directly: txt, md, csv, json, yaml, py, html, xml, docx, xlsx, pptx, pdf, or a real zip archive.
 - If the task offers local application tools, inspect the tool catalog before assuming a record is unavailable. Project data often lives in the spreadsheet, email, document or CAD tools rather than in plain files.
 - Never defer every deliverable to one final generation script. Write each deliverable to its final path as soon as its inputs are ready, then re-open it. A single script that emits all files at the end is one bug away from submitting nothing at all.
+- Paths written as output/... are relative to the workspace working directory. Only files inside the declared output location are collected.
+- If a starter version of a deliverable already exists on disk, improve it in place and re-open it; do not restart from a blank generator script.
 - Your final answer is graded alongside the files on open-ended tasks. Give a short, concrete summary naming each deliverable path and the key results, with units.
 """
 
@@ -70,6 +72,18 @@ GUARD_MESSAGE = (
     "improving it only after that."
 )
 
+# Injected once when the tool-call budget is nearly exhausted. Unlike the guard
+# this also performs a real packaging pass on disk, so a model that keeps
+# exploring still leaves graded files behind.
+FINALIZE_MESSAGE = (
+    "FINALIZATION WINDOW. Your remaining tool calls are almost exhausted. "
+    "Stop exploring and stop writing new analysis scripts. Check that EVERY "
+    "deliverable path named in the task exists, is non-empty and readable, "
+    "and contains your final numbers with units. Fix only what is missing or "
+    "broken, re-open each file to confirm it, then answer with a short summary "
+    "of the deliverable paths and key results."
+)
+
 # Paths the task itself names as deliverables (a generic text extraction, not
 # a task-id lookup). Used only to tell scratch writes apart from deliverables.
 DELIVERABLE_PATH = re.compile(
@@ -82,6 +96,19 @@ DELIVERABLE_HINT = re.compile(
     r"(?:/|$|\.)",
     re.I,
 )
+# Many tasks name deliverables as workspace-relative paths in backticks, e.g.
+# `output/solution.py` or "under `output/`". The evaluator runs commands in the
+# workspace workdir, so resolving them with os.getcwd() is task-independent.
+RELATIVE_DELIVERABLE = re.compile(
+    r"(?<![/\w])(?:output|submission|deliverables?|final|results?)"
+    r"/[\w.\-/]*[\w.\-]+\."
+    r"(?:zip|json|csv|xlsx|docx|pdf|md|txt|ifc|py|yaml|yml|xml|html|pptx|dwg|dxf|step|stp)\b",
+    re.I,
+)
+OUTPUT_DIR = re.compile(
+    r"(?<![/\w])(?:output|submission|deliverables?|final|results?)/", re.I
+)
+SEED_HEADER = "# rook-generated submission summary\n\n"
 
 
 def deliverable_paths(instruction: str) -> tuple[str, ...]:
@@ -92,6 +119,26 @@ def deliverable_paths(instruction: str) -> tuple[str, ...]:
         if path not in found:
             found.append(path)
     return tuple(found[:40])
+
+
+def relative_deliverables(instruction: str) -> tuple[str, ...]:
+    """Extracts workspace-relative deliverable paths the task names."""
+    found: list[str] = []
+    for match in RELATIVE_DELIVERABLE.finditer(instruction or ""):
+        path = match.group(0).rstrip(".,;:")
+        if path not in found:
+            found.append(path)
+    return tuple(found[:30])
+
+
+def output_dirs(instruction: str) -> tuple[str, ...]:
+    """Extracts declared output directories, e.g. `output/`."""
+    found: list[str] = []
+    for match in OUTPUT_DIR.finditer(instruction or ""):
+        name = match.group(0).rstrip("/")
+        if name and name not in found:
+            found.append(name)
+    return tuple(found[:10])
 
 FALLBACK_SUMMARY = (
     "The agent stopped before it could summarise its work. The complete "
@@ -135,7 +182,8 @@ except Exception:
     paths = []
 
 parts = []
-for path in paths[:40]:
+for raw in paths[:40]:
+    path = raw if os.path.isabs(raw) else os.path.abspath(os.path.join(os.getcwd(), raw))
     if not os.path.exists(path):
         parts.append("MISSING " + path)
         continue
@@ -169,42 +217,178 @@ import os
 import sys
 import zipfile
 
-try:
-    with open(os.environ.get("PLE_EXPECTED_FILE", "/tmp/ple_expected.json"), encoding="utf-8") as handle:
-        paths = json.load(handle)
-except Exception:
-    paths = []
+SUMMARY_NOTE = "# rook-generated submission summary\n\n"
+
+def load(env_name, default):
+    try:
+        with open(os.environ.get(env_name, default), encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return []
+
 try:
     with open(os.environ.get("PLE_SUMMARY_FILE", "/tmp/ple_summary.txt"), encoding="utf-8") as handle:
         summary = handle.read()
 except Exception:
     summary = "Partial deliverable: see the accompanying work files."
 
+base = os.getcwd()
+absolute = load("PLE_EXPECTED_FILE", "/tmp/ple_expected.json")
+relative = load("PLE_RELATIVE_FILE", "/tmp/ple_relative.json")
+dirs = load("PLE_DIRS_FILE", "/tmp/ple_dirs.json")
+
+paths = []
+for item in list(absolute) + list(relative):
+    if not isinstance(item, str) or not item:
+        continue
+    path = item if os.path.isabs(item) else os.path.abspath(os.path.join(base, item))
+    normalized = path.replace("\\", "/").lower()
+    if "/input/" in normalized and "/output/" not in normalized:
+        continue
+    if path not in paths:
+        paths.append(path)
+
+folders = []
+for item in dirs:
+    if isinstance(item, str) and item:
+        folder = item if os.path.isabs(item) else os.path.abspath(os.path.join(base, item))
+        if folder not in folders:
+            folders.append(folder)
+for path in paths:
+    parent = os.path.dirname(path)
+    if parent and parent not in folders:
+        folders.append(parent)
+
 created = []
-for path in paths[:20]:
+repacked = []
+for folder in folders[:20]:
     try:
-        if os.path.isfile(path) and os.path.getsize(path) > 0:
-            continue
+        os.makedirs(folder, exist_ok=True)
+        note = os.path.join(folder, "SUMMARY.md")
+        overwrite = False
+        if not os.path.isfile(note):
+            overwrite = True
+        else:
+            try:
+                with open(note, "r", encoding="utf-8") as handle:
+                    head = handle.read(len(SUMMARY_NOTE))
+                overwrite = head == SUMMARY_NOTE
+            except Exception:
+                overwrite = False
+        if overwrite:
+            with open(note, "w", encoding="utf-8") as handle:
+                handle.write(SUMMARY_NOTE + summary[:20000])
+            created.append(note)
+    except Exception as exc:
+        print("SKIP_DIR", folder, type(exc).__name__)
+
+for path in paths[:30]:
+    try:
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
         ext = path.lower().rsplit(".", 1)[-1]
         if ext == "zip":
+            members = {}
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                try:
+                    with zipfile.ZipFile(path) as archive:
+                        for name in archive.namelist():
+                            try:
+                                members[name] = archive.read(name)
+                            except Exception:
+                                pass
+                except Exception:
+                    members = {}
+            grandparent = os.path.dirname(parent)
             roots = [parent]
-            work = os.path.join(os.path.dirname(parent), "work")
+            work = os.path.join(grandparent, "work")
             if os.path.isdir(work):
                 roots.append(work)
-            items = []
+            added = 0
             for root in roots:
+                if added >= 100:
+                    break
                 for dirpath, _, names in os.walk(root):
-                    for name in names:
+                    if "__pycache__" in dirpath:
+                        continue
+                    for name in names[:120]:
                         full = os.path.join(dirpath, name)
-                        if full != path and os.path.isfile(full) and os.path.getsize(full) > 0:
-                            items.append(full)
+                        if full == path or not os.path.isfile(full):
+                            continue
+                        try:
+                            size = os.path.getsize(full)
+                            if size == 0 or size > 2000000:
+                                continue
+                            arc = os.path.relpath(full, grandparent)
+                            if arc not in members:
+                                with open(full, "rb") as handle:
+                                    members[arc] = handle.read()
+                                added += 1
+                        except Exception:
+                            pass
+                        if added >= 100:
+                            break
+                    if added >= 100:
+                        break
+            # Always refresh our own summary. Everything the model wrote is
+            # preserved byte-for-byte; we only add missing scratch work.
+            members["SUMMARY.txt"] = (SUMMARY_NOTE + summary[:16000]).encode("utf-8", "replace")
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-                for full in items[:120]:
-                    archive.write(full, os.path.relpath(full, os.path.dirname(parent)))
-                archive.writestr("SUMMARY.txt", summary[:16000])
+                for name, data in list(members.items())[:140]:
+                    archive.writestr(name, data)
+            repacked.append(path)
+            continue
+
+        existing = os.path.isfile(path) and os.path.getsize(path) > 0
+        ours = False
+        if existing and ext == "py":
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    ours = handle.read(30).startswith("# Partial submission")
+            except Exception:
+                ours = False
+        if existing and not ours:
+            continue
+        if ext == "py":
+            # A comment-only stub scores nothing. Promote the largest
+            # syntactically valid Python file the model itself produced.
+            grandparent = os.path.dirname(parent)
+            candidates = []
+            for root in (parent, os.path.join(grandparent, "work")):
+                if not os.path.isdir(root):
+                    continue
+                for dirpath, _, names in os.walk(root):
+                    if "__pycache__" in dirpath:
+                        continue
+                    for name in names:
+                        if name.endswith(".py"):
+                            full = os.path.join(dirpath, name)
+                            if full != path and os.path.isfile(full):
+                                candidates.append(full)
+            candidates.sort(key=os.path.getsize, reverse=True)
+            promoted = False
+            for candidate in candidates[:6]:
+                try:
+                    with open(candidate, "r", encoding="utf-8") as handle:
+                        body = handle.read()
+                    if len(body.strip()) < 40:
+                        continue
+                    compile(body, candidate, "exec")
+                    with open(path, "w", encoding="utf-8") as handle:
+                        handle.write(body)
+                    promoted = True
+                    break
+                except Exception:
+                    continue
+            if not promoted:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        "# Partial submission: the final analysis is in SUMMARY.md\n"
+                        "# and in the accompanying work files.\n"
+                        + "".join("# " + line + "\n" for line in summary[:4000].splitlines())
+                    )
+            created.append(path)
         elif ext in ("xlsx", "docx", "pdf"):
             try:
                 sys.path.insert(0, "/tmp")
@@ -219,21 +403,27 @@ for path in paths[:20]:
             except Exception:
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(summary[:20000])
+            created.append(path)
         else:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(summary[:20000])
-        created.append(path)
+            created.append(path)
     except Exception as exc:
         print("SKIP", path, type(exc).__name__, str(exc)[:100])
-print("CREATED", len(created), "of", len(paths))
-for path in created:
+print("CREATED", len(created), "REPACKED", len(repacked),
+      "PATHS", len(paths), "FOLDERS", len(folders))
+for path in created[:10]:
     print(" +", path)
+for path in repacked[:10]:
+    print(" ~", path)
 '''
 
 TOOLKIT_PATH = "/tmp/ple_toolkit.py"
 PATHS_PATH = "/tmp/ple_paths.json"
 REPORT_PATH = "/tmp/ple_report.py"
 EXPECTED_PATHS_PATH = "/tmp/ple_expected.json"
+RELATIVE_PATHS_PATH = "/tmp/ple_relative.json"
+OUTPUT_DIRS_PATH = "/tmp/ple_dirs.json"
 SUMMARY_PATH = "/tmp/ple_summary.txt"
 ENSURE_PATH = "/tmp/ple_ensure.py"
 # A U+0000 or an over-long final_message would be rejected by the protocol.
@@ -271,6 +461,9 @@ class Config:
         raw = (os.environ.get("ROOK_MAX_TOOL_CALLS") or "").strip()
         self.max_calls = max(0, int(raw)) if raw.isdigit() else 0
         self.fallback = _flag("ROOK_DELIVERABLE_FALLBACK", True)
+        self.seed = _flag("ROOK_SEED_DELIVERABLES", True)
+        reserve = (os.environ.get("ROOK_RESERVE_CALLS") or "").strip()
+        self.reserve_calls = max(0, int(reserve)) if reserve.isdigit() else 8
 
 
 def build_system() -> str:
@@ -332,17 +525,30 @@ async def ensure_deliverables(
 ) -> None:
     """Makes every declared deliverable path exist and be non-empty.
 
-    A weak model can burn its whole budget on scratch analysis and never run
-    its final packaging step. Graders then refuse to run and the run is
-    unmeasured, so even a partial package of the model's own work is strictly
+    Handles both absolute paths and workspace-relative ones such as
+    ``output/solution.py`` (resolved against the container workdir). A weak
+    model can burn its whole budget on scratch analysis and never run its final
+    packaging step; graders then refuse to run and the whole trial is
+    unmeasured, so a partial package of the model's own work is strictly
     better. Existing non-empty files are never overwritten.
     """
-    if agent is None or not agent.expected_paths:
+    expected = list(agent.expected_paths) if agent else []
+    relatives = (
+        list(agent.relative_paths)
+        if agent
+        else list(relative_deliverables(session.instruction))
+    )
+    dirs = (
+        list(agent.output_folders)
+        if agent
+        else list(output_dirs(session.instruction))
+    )
+    if not (expected or relatives or dirs):
         return
     try:
-        await session.write_file(
-            EXPECTED_PATHS_PATH, json.dumps(agent.expected_paths)
-        )
+        await session.write_file(EXPECTED_PATHS_PATH, json.dumps(expected))
+        await session.write_file(RELATIVE_PATHS_PATH, json.dumps(relatives))
+        await session.write_file(OUTPUT_DIRS_PATH, json.dumps(dirs))
         await session.write_file(SUMMARY_PATH, summary or FALLBACK_SUMMARY)
         await session.write_file(ENSURE_PATH, ENSURE_SCRIPT)
         result = await session.exec("python3 " + ENSURE_PATH, timeout_sec=120)
@@ -383,7 +589,10 @@ class GuardedAgent(engine.Agent):
         self.guard_prompts = 0
         self.repairs = 0
         self.expected_paths = deliverable_paths(session.instruction)
+        self.relative_paths = relative_deliverables(session.instruction)
+        self.output_folders = output_dirs(session.instruction)
         self.deliverable_writes = 0
+        self._finalized = False
 
     async def run_tool(self, name: str, args: dict[str, Any]) -> str:
         """Runs a tool and tracks whether it changed a file on disk."""
@@ -425,7 +634,31 @@ class GuardedAgent(engine.Agent):
         return result
 
     async def complete(self, *args: Any, **kwargs: Any) -> Any:
-        """Injects a deliverable checkpoint before the next model call."""
+        """Injects deliverable checkpoints before the next model call."""
+        if (
+            kwargs.get("tool_choice", "auto") != "none"
+            and self.config.reserve_calls
+            and self.config.max_calls
+            and not self._finalized
+            and self.tool_calls
+            >= max(0, self.config.max_calls - self.config.reserve_calls)
+        ):
+            # A real packaging pass, not just a reminder: the model may ignore
+            # the message, but the files must already be on disk.
+            self._finalized = True
+            await ensure_deliverables(
+                self.session, self, self.session.final_message or FALLBACK_SUMMARY
+            )
+            if self.messages and self.messages[-1].get("role") == "user":
+                last = self.messages[-1]
+                content = last.get("content", "")
+                last["content"] = (
+                    content if isinstance(content, str) else str(content)
+                ) + "\n\n" + FINALIZE_MESSAGE
+            else:
+                self.messages.append({"role": "user", "content": FINALIZE_MESSAGE})
+            self.silent_streak = 0
+            await safe_log(self.session, "rook: finalization window opened")
         if (
             kwargs.get("tool_choice", "auto") != "none"
             and self.config.max_calls
@@ -633,12 +866,25 @@ async def solve(session: taskbridge.Session) -> str:
             await install_toolkit(session)
         engine.SYSTEM = build_system()
         agent = GuardedAgent(session, config)
+        if config.seed and config.fallback:
+            # Materialise a real, non-empty first version of every declared
+            # deliverable before the first model call. Files on disk are scored
+            # even if the run is cancelled, times out or the model never reaches
+            # its packaging step, and artifacts can always be exported.
+            await ensure_deliverables(
+                session, agent, session.final_message or FALLBACK_SUMMARY
+            )
         answer = await agent.run()
         for _ in range(config.verify_rounds):
             left = session.time_left()
             if left is not None and left < config.verify_min_sec:
                 break
-            report = await collect_report(session, agent.written_paths)
+            report = await collect_report(
+                session,
+                list(agent.expected_paths)
+                + list(agent.relative_paths)
+                + list(agent.written_paths),
+            )
             passed, gaps = await agent.verify(answer, report)
             if passed or not gaps:
                 break
