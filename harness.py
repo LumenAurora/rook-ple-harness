@@ -108,6 +108,17 @@ RELATIVE_DELIVERABLE = re.compile(
 OUTPUT_DIR = re.compile(
     r"(?<![/\w])(?:output|submission|deliverables?|final|results?)/", re.I
 )
+# Rubric tasks in document-management worlds name a deliverable with a bare
+# relative filename after "save it as" / "saved as". These live in an MCP
+# document server, NOT on the local filesystem: use them only to classify
+# tool writes, never to create files.
+SAVED_AS = re.compile(
+    r"(?:save(?:d)?\s+(?:it\s+|them\s+|the\s+\w+\s+)?as|"
+    r"put\s+it\s+in|name\s+it|deliver(?:ed)?\s+as|store(?:d)?\s+as)"
+    r"\s*[`\"']?([\w.\-/]+\."
+    r"(?:docx|doc|xlsx|pdf|pptx|md|txt|csv|json|zip|ifc|dxf|xml|html))\b",
+    re.I,
+)
 SEED_HEADER = "# rook-generated submission summary\n\n"
 
 
@@ -139,6 +150,19 @@ def output_dirs(instruction: str) -> tuple[str, ...]:
         if name and name not in found:
             found.append(name)
     return tuple(found[:10])
+
+
+def saved_as_paths(instruction: str) -> tuple[str, ...]:
+    """Extracts document-server filenames named by 'save ... as' wording.
+
+    Classification only: these are not local filesystem deliverables.
+    """
+    found: list[str] = []
+    for match in SAVED_AS.finditer(instruction or ""):
+        name = match.group(1).rstrip(".,;:")
+        if name and name not in found:
+            found.append(name)
+    return tuple(found[:20])
 
 FALLBACK_SUMMARY = (
     "The agent stopped before it could summarise its work. The complete "
@@ -590,6 +614,12 @@ class GuardedAgent(engine.Agent):
         self.repairs = 0
         self.expected_paths = deliverable_paths(session.instruction)
         self.relative_paths = relative_deliverables(session.instruction)
+        # Only used to classify writes; never handed to ENSURE_SCRIPT.
+        self.classify_paths = (
+            self.expected_paths
+            + self.relative_paths
+            + saved_as_paths(session.instruction)
+        )
         self.output_folders = output_dirs(session.instruction)
         self.deliverable_writes = 0
         self._finalized = False
@@ -612,14 +642,37 @@ class GuardedAgent(engine.Agent):
         target = ""
         if isinstance(args, dict):
             target = str(args.get("path") or "")
+        if not target and name == "mcp_call" and isinstance(args, dict):
+            # engine.run_tool() reads mcp_call's real payload from
+            # args["arguments"] (a dict or a JSON string). Document servers
+            # put the destination in one of these fields.
+            payload = args.get("arguments")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (ValueError, TypeError):
+                    payload = {}
+            if isinstance(payload, dict):
+                for key in ("path", "file_path", "filepath", "filename",
+                            "file", "target", "name", "destination"):
+                    if payload.get(key):
+                        target = str(payload[key])
+                        break
         if not target and name == "bash" and isinstance(args, dict):
-            match = DELIVERABLE_PATH.search(str(args.get("command", "")))
-            target = match.group(0) if match else ""
+            command = str(args.get("command", ""))
+            for pattern in (DELIVERABLE_PATH, RELATIVE_DELIVERABLE):
+                match = pattern.search(command)
+                if match:
+                    target = match.group(0)
+                    break
         is_deliverable = bool(target) and (
             bool(DELIVERABLE_HINT.search(target))
             or any(
-                target == path or target.startswith(path.rsplit("/", 1)[0])
-                for path in self.expected_paths
+                target == path
+                or path in target
+                or target in path
+                or target.startswith(path.rsplit("/", 1)[0])
+                for path in self.classify_paths
             )
         )
         if wrote and is_deliverable:
