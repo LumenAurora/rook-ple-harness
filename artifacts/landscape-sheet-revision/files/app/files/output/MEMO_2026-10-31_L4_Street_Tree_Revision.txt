@@ -1,0 +1,148 @@
+MEMORANDUM
+================================================================
+
+To:   Garrett Nokes, Vice President, Land Development - Callaway Land Partners
+From: Max Braddock, Project Manager - Sundial Engineering & Survey
+Date: 10/31/2026
+Re:   Desert Sage Ranch Phase 3 - L-4 Street Tree Revision; 11/30/2026
+      Resubmittal Commitment (IP-26-100288 / FM-26-100290; TM-22-500041)
+
+1. Bottom line
+Yes - we can commit to 11/30/2026 for the L-4 street tree revision, subject to
+two gates.
+
+(1) Gate 1 (critical path, due 11/10/2026): Comprehensive Planning
+(O. Marchetti) confirms in writing that the street tree count correction is
+not a material change to the approved plan under TM-22-500041 Condition 14 /
+Advisory Comment A-3 of the 10/09/2026 comment letter.
+
+(2) Gate 2 (due 11/13/2026): Ocotillo (Bea Cortland, PLA) delivers the
+revised L-2 streetscape plan, the updated L-1 plant schedule, and the
+revised annual irrigation demand, so the set clears the 11/22/2026 internal
+check-off and the one-week QC, principal-review, and transmittal window that
+ends at the 11/30/2026 resubmittal to Dale Yeoman at Clark County Public
+Works.
+
+The 11/18 Enterprise TAB meeting is no longer available for a Phase 3
+landscape design-review item: the 21-day application cutoff closed
+10/28/2026. If the revision were treated as a material change, the only
+process path is the 12/16/2026 TAB meeting, which falls after the
+resubmittal date and would break both the 11/30 resubmittal and the 12/18
+recordation target. Consistent with your 10/22/2026 instruction, the
+revision is being carried as a clerical redline against the current sheets,
+in the approved Phase 1/2 palette, adding no process and no TAB agenda time.
+
+2. What comment L-4 requires
+- The comment: CCPW first-round comment L-4 (binding, letter dated
+  10/09/2026): street frontage planting at one tree per 20 linear feet per
+  Title 30 ch. 30.64 (sec. 30.64.030(k), medium-canopy tier per Guidance
+  Memo CP-PW-GM-2025-04). Based on 4,160 lf of Phase 3 street frontage,
+  208 trees are required against 58 shown - a shortfall of 150. The comment
+  requires the revised planting plan and a revised annual irrigation demand
+  with the resubmittal.
+- Tree allocation: per the L-2 streetscape frontage summary - Windmill Ln.
+  north frontage 2,560 lf: 128 trees (34 shown); Phase 3 interior
+  collector, both sides 1,180 lf: 59 trees (16 shown); Rainbow Blvd. entry
+  frontage 420 lf: 21 trees (8 shown). Total 208.
+- Irrigation demand: TM Condition 28 requires the irrigation demand
+  worksheet to be updated for any revision to the planting. At the current
+  per-tree allowance (2,000 gal/tree/yr), street tree demand rises from
+  116,000 to 416,000 gal/yr; total Phase 3 tree demand from 148,000 to
+  448,000 gal/yr (74 to 224 trees including entry and park interior); total
+  annual irrigation demand from 3.28 to approximately 4.21 acre-ft/yr
+  (+0.92 acre-ft/yr). The revised worksheet goes in the resubmittal
+  package under the same cover.
+- Canopy target: staff also apply a 30% 15-year shade-coverage target
+  (CP-PW-GM-2025-04). Adding the 150 trees in the approved palette should
+  satisfy or improve the ratio; Ocotillo to verify against the revised
+  plan by 11/13. If any frontage still falls short, the guidance calls for
+  additional trees or higher-canopy substitutions - which would raise the
+  count above 208 - and we would flag it to you immediately rather than
+  let it surface at second-round review.
+
+3. Cross-check against the current sheets and the resubmittal tracker
+- Current sheets: the L-set issued 08/21/2026 is internally inconsistent,
+  which is what drew the comment: the section notes on L-2 and General
+  Note 7 on L-1 state trees at 20 ft o.c. and claim canopy-standard
+  compliance, but the plotted counts are 58 trees across 4,160 lf
+  (effective spacing of about 52-75 lf per tree). The revision must
+  correct the plan counts, the L-1 schedule, the frontage summary, and the
+  notes as a set.
+- Tracker: L-4 is OPEN (owner Bea Cortland, due 11/22/2026). Related items
+  In progress: L-1 (L-1-L-4 to be sealed by the landscape architect of
+  record at resubmittal), L-5 (streetscape sections, tree setbacks and
+  turf-free 10-ft street zones), L-6 (plant schedule vs. graphic counts on
+  L-2/L-3). L-2/L-3 (park turf) are pending client direction. The
+  11/22/2026 internal gate leaves one week for QC, principal review, and
+  transmittal assembly before 11/30.
+- Budget: the L-4 work sits in resubmittal line B-04 ($14,300 to Ocotillo,
+  covering L-1-L-4 revisions and the revised irrigation worksheet). No new
+  fee commitment required.
+
+4. What has to happen first
+1. GATE 1 - by 11/10/2026 (critical path): Sundial obtains
+   Comprehensive Planning's written confirmation that the tree count
+   correction does not trigger the TAB/Planning Commission design-review
+   process (Advisory A-3; TM Condition 14). We are positioning it as a
+   code-compliance correction of counts within the approved streetscape
+   palette, not a material change of character. If not cleared in writing
+   by 11/10, we advise you the same day and re-baseline, because the 12/16
+   TAB slot is the only available process path and it falls after the
+   resubmittal date.
+2. GATE 2 - by 11/13/2026: Ocotillo delivers the redlined L-2
+   streetscape plan showing 208 trees (128 / 59 / 21 by frontage), the
+   updated L-1 plant schedule and frontage summary, the 30%
+   shade-coverage verification, and the revised annual irrigation demand
+   (approx. 4.21 acre-ft/yr). By 11/22/2026: L-6 graphic/schedule
+   reconciliation complete, QA/QC back-check, and L-1 through L-4 sealed
+   per comment L-1.
+3. Keep the park scope out of this resubmittal: the L-2/L-3 park items
+   close on the Vogel & Marsh position of 10/20/2026 (nonfunctional turf
+   prohibition inapplicable to this single-family subdivision; compliance
+   note as-drawn) with the firm's short cover letter in the package. Any
+   park amenity or palette change - the HOA playground-amenity question
+   (Meeker letter of 10/17/2026) or the park palette revision floated at
+   the 10/30 meeting - is a material change under Condition 14 and is
+   decoupled from the 11/30 package per your 10/22 instruction; it would
+   run on its own process track (12/16 TAB at the earliest). The client
+   direction on park amenity scope (tracker target 11/07/2026) does not
+   block L-4.
+4. Package items due at or before 11/22 regardless of L-4: M-5 Callaway
+   authorized signatory confirmation for the Owner's Certificate and
+   Dedication (target 11/13/2026); U-2 current will-serve/capacity
+   confirmations (water will-serve of 07/22/2026 in the clearance log
+   must be current at plan approval); M-4 Schedule B exception plot from
+   SBT-2026-04188, effective 07/01/2026 and current through 01/01/2027
+   (target 11/06/2026); G-8 NDEP NVR100000 NOI status for the stand-alone
+   ESC sheet (target 11/13/2026).
+5. TRANSMITTAL - 11/30/2026: annotated comment matrix, red-lined set,
+   clean revised sheets, and revised irrigation demand to Dale Yeoman,
+   Clark County Public Works Development Review counter and ePlans portal,
+   marked IP-26-100288 and FM-26-100290.
+
+5. Watch items (not L-4-specific, but on the same clock)
+- Second-round review: per the CCPW letter, second-round review is
+  generally completed within 20 business days of receipt of a complete
+  resubmittal (approximately 12/29/2026 on a 12/01/2026 receipt). The
+  12/18 recordation target therefore depends on a fast second round; we
+  will keep certificate-set signature routing (M-6) staged so the set can
+  move the day technical approval lands.
+- NRS 278.360 presentation clock: the Phase 1/2 final map recorded
+  12/23/2024, so the successive-map presentation deadline for Phase 3 is
+  12/23/2026 - five days behind the 12/18 recordation target. This is an
+  open confirmation with Comprehensive Planning (tracker target
+  11/06/2026; Neil Petrosyan's title-side read of 10/26/2026 is on the
+  tentative-map clock, not this one). If 11/30 holds, the statutory outer
+  date is not a constraint on L-4; it is a constraint on any package slip.
+- TAB 11/18/2026: organized Phase 1/2 homeowners expect to take public
+  comment on the Phase 3 park at the 11/18 TAB meeting (Meeker letter).
+  Public comment does not create a process item; only a material
+  landscape change would - which is why Gate 1 must clear first and the
+  park scope stays out of the resubmittal.
+
+----------------------------------------------------------------
+Signature (Sundial):  ______________________________________        Date: ____________
+Max Braddock, Project Manager - Sundial Engineering & Survey
+
+Attachments (filed with this memo): Attachment_1_Resubmittal_Tracker_Extract.csv
+and Attachment_2_Irrigation_Demand_Rev_Basis.csv
