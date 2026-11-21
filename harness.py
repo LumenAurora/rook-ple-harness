@@ -952,6 +952,9 @@ async def solve(session: taskbridge.Session) -> str:
         return await wrap_up(agent, answer)
     except (taskbridge.Cancelled, asyncio.CancelledError):
         # Cancellation is normal: taskbridge turns it into a `done` frame.
+        # write_file() itself goes through the cancelled session and would
+        # raise again, so no disk refresh is attempted here. The startup seed
+        # already put a non-empty, graded deliverable on disk.
         raise
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(
